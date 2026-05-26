@@ -9,6 +9,7 @@
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "SceneView.h"
 
 FViewportService::FViewportService()

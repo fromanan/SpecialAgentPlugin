@@ -6,7 +6,9 @@ public class SpecialAgent : ModuleRules
 {
 	public SpecialAgent(ReadOnlyTargetRules Target) : base(Target)
 	{
-		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		// Live Coding patch links can fail with LNK2011 when plugin objects depend on
+		// the target shared PCH object but the patch image does not link that object.
+		PCHUsage = ModuleRules.PCHUsageMode.NoPCHs;
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
@@ -58,6 +60,7 @@ public class SpecialAgent : ModuleRules
 				"LandscapeEditor",
 				"NavigationSystem",
 				"AIModule",
+				"PhysicsCore",
 				"ToolMenus",
 			}
 		);

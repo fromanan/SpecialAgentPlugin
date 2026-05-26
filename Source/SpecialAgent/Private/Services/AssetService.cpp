@@ -2,6 +2,7 @@
 
 #include "Services/AssetService.h"
 #include "GameThreadDispatcher.h"
+#include "AssetRegistry/AssetData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/StaticMesh.h"
@@ -11,7 +12,9 @@
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/Material.h"
+#include "MaterialDomain.h"
 #include "PhysicsEngine/BodySetup.h"
+#include "StaticMeshResources.h"
 
 FAssetService::FAssetService()
 {

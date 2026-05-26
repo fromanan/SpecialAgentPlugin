@@ -9,6 +9,7 @@
 #include "HttpServerRequest.h"
 #include "HttpServerResponse.h"
 #include "Containers/Queue.h"
+#include "Dom/JsonObject.h"
 
 class FMCPRequestRouter;
 struct FMCPRequest;

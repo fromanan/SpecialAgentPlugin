@@ -15,6 +15,8 @@
 #include "Services/NavigationService.h"
 #include "Services/GameplayService.h"
 #include "Services/UtilityService.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 namespace
 {
