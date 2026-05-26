@@ -10,6 +10,8 @@
 #include "HttpServerResponse.h"
 #include "Containers/Queue.h"
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
+#include "SpecialAgentSettings.h"
 
 class FMCPRequestRouter;
 struct FMCPRequest;
@@ -34,7 +36,7 @@ struct FSSEConnection
 /**
  * MCP Server Implementation
  * 
- * Implements the Model Context Protocol with native HTTP/SSE transport.
+ * Implements the Model Context Protocol with native streamable HTTP transport.
  * Handles incoming requests from MCP clients (like Cursor) and routes them to appropriate services.
  */
 class SPECIALAGENT_API FSpecialAgentMCPServer
@@ -49,6 +51,11 @@ public:
 	 * @return true if server started successfully
 	 */
 	bool StartServer(int32 Port = 8767);
+
+	/**
+	 * Start the MCP HTTP server using resolved SpecialAgent settings
+	 */
+	bool StartServer(const FSpecialAgentSettings& InSettings);
 
 	/**
 	 * Stop the MCP server
@@ -66,6 +73,16 @@ public:
 	TSharedPtr<FMCPRequestRouter> GetRouter() const { return RequestRouter; }
 
 	/**
+	 * Get the active server port
+	 */
+	int32 GetPort() const { return ServerPort; }
+
+	/**
+	 * Get the streamable HTTP endpoint URL
+	 */
+	FString GetMcpEndpointUrl() const;
+
+	/**
 	 * Get number of recently connected clients (based on recent request activity)
 	 */
 	int32 GetConnectedClientCount() const;
@@ -76,7 +93,7 @@ public:
 	void RecordClientActivity();
 
 private:
-	/** Handle SSE connection request (GET /sse) */
+	/** Return a clear unsupported response for legacy SSE connection requests (GET /sse) */
 	bool HandleSSEConnection(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
 
 	/** Handle MCP message request (POST /message) */
@@ -92,7 +109,19 @@ private:
 	bool ParseRequest(const FString& JsonString, FMCPRequest& OutRequest);
 
 	/** Format JSON-RPC response */
-	FString FormatResponse(const FMCPResponse& Response);
+	static FString FormatResponse(const FMCPResponse& Response);
+
+	/** Add standard CORS/cache headers to a response */
+	void AddStandardHeaders(FHttpServerResponse& Response, const FString& CorsOrigin) const;
+
+	/** Return an allowed CORS origin for this request, or empty if no Origin was provided */
+	FString GetAllowedCorsOrigin(const FHttpServerRequest& Request) const;
+
+	/** Check origin, loopback, and optional token policy before handling a request */
+	bool AuthorizeRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete, bool bRequireToken) const;
+
+	/** Create and complete an HTTP error response */
+	bool CompleteWithError(const FHttpResultCallback& OnComplete, EHttpServerResponseCodes Code, const FString& Message, const FString& CorsOrigin) const;
 
 	/** Send SSE event to a specific session */
 	void SendSSEEvent(const FString& SessionId, const FString& EventType, const FString& Data);
@@ -111,9 +140,7 @@ private:
 	TSharedPtr<IHttpRouter> HttpRouter;
 
 	/** Route handles for cleanup */
-	FHttpRouteHandle SSERouteHandle;
-	FHttpRouteHandle MessageRouteHandle;
-	FHttpRouteHandle HealthRouteHandle;
+	TArray<FHttpRouteHandle> RouteHandles;
 
 	/** Request router */
 	TSharedPtr<FMCPRequestRouter> RequestRouter;
@@ -129,6 +156,9 @@ private:
 
 	/** Server port */
 	int32 ServerPort;
+
+	/** Resolved runtime settings */
+	FSpecialAgentSettings Settings;
 
 	/** Critical section for thread safety */
 	FCriticalSection ConnectionsLock;
@@ -152,9 +182,14 @@ struct FMCPRequest
 	FString Method;
 	TSharedPtr<FJsonObject> Params;
 	FString Id;  // Can be string or number
+	TSharedPtr<FJsonValue> IdValue;
+	bool bHasId;
+	bool bIsNotification;
 
 	FMCPRequest()
 		: JsonRpc(TEXT("2.0"))
+		, bHasId(false)
+		, bIsNotification(true)
 	{}
 };
 
@@ -170,11 +205,14 @@ struct FMCPResponse
 	TSharedPtr<FJsonObject> Result;
 	TSharedPtr<FJsonObject> ErrorObject;
 	FString Id;
+	TSharedPtr<FJsonValue> IdValue;
+	bool bHasId;
 
 	bool bSuccess;
 
 	FMCPResponse()
 		: JsonRpc(TEXT("2.0"))
+		, bHasId(false)
 		, bSuccess(true)
 	{}
 
@@ -183,6 +221,8 @@ struct FMCPResponse
 	{
 		FMCPResponse Response;
 		Response.Id = InId;
+		Response.bHasId = true;
+		Response.IdValue = MakeShared<FJsonValueString>(InId);
 		Response.Result = InResult;
 		Response.bSuccess = true;
 		return Response;
@@ -193,6 +233,8 @@ struct FMCPResponse
 	{
 		FMCPResponse Response;
 		Response.Id = InId;
+		Response.bHasId = true;
+		Response.IdValue = MakeShared<FJsonValueString>(InId);
 		Response.bSuccess = false;
 
 		TSharedPtr<FJsonObject> ErrorObj = MakeShared<FJsonObject>();

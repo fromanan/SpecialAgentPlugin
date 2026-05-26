@@ -31,7 +31,7 @@ asyncio.run(run())
 In Unreal Engine, open the Python console and run:
 ```python
 import sys
-sys.path.append("A:/Exordium/SpecialAgent/Content/Python")
+sys.path.append("<YourProject>/Plugins/SpecialAgent/Content/Python")
 import list_all_assets
 list_all_assets.list_all_assets()
 ```

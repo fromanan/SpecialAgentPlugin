@@ -15,6 +15,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/Blueprint.h"
 #include "Selection.h"
+#include "ScopedTransaction.h"
 
 FWorldService::FWorldService()
 {
@@ -28,13 +29,19 @@ FString FWorldService::GetServiceDescription() const
 // Helper function to execute Python code from request params
 FMCPResponse FWorldService::ExecutePythonFromParams(const FMCPRequest& Request)
 {
-	if (!Request.Params.IsValid() || !Request.Params->HasField(TEXT("code")))
+	if (!Request.Params.IsValid())
 	{
 		return InvalidParams(Request.Id, TEXT("Missing required parameter: 'code' (Python script)"));
 	}
 
-	FString Code = Request.Params->GetStringField(TEXT("code"));
-	float Timeout = Request.Params->HasField(TEXT("timeout")) ? Request.Params->GetNumberField(TEXT("timeout")) : 30.0f;
+	FString Code;
+	if (!Request.Params->TryGetStringField(TEXT("code"), Code))
+	{
+		return InvalidParams(Request.Id, TEXT("Missing required parameter: 'code' (Python script)"));
+	}
+
+	float Timeout = 30.0f;
+	Request.Params->TryGetNumberField(TEXT("timeout"), Timeout);
 
 	FPythonService PythonService;
 	TSharedPtr<FJsonObject> PythonParams = MakeShared<FJsonObject>();
@@ -99,6 +106,21 @@ static AActor* FindActor(UWorld* World, const FString& ActorName)
 		if ((*It)->GetActorLabel() == ActorName) return *It;
 	}
 	return nullptr;
+}
+
+static void MarkActorEdited(AActor* Actor)
+{
+	if (!Actor)
+	{
+		return;
+	}
+
+	Actor->PostEditMove(true);
+	Actor->MarkPackageDirty();
+	if (UWorld* World = Actor->GetWorld())
+	{
+		World->MarkPackageDirty();
+	}
 }
 
 // Request Handler
@@ -167,6 +189,7 @@ FMCPResponse FWorldService::HandleListActors(const FMCPRequest& Request)
 			(*FilterObj)->TryGetStringField(TEXT("class"), ClassFilter);
 		}
 	}
+	MaxResults = FMath::Clamp(MaxResults, 1, 5000);
 
 	auto ListTask = [MaxResults, ClassFilter]() -> TSharedPtr<FJsonObject>
 	{
@@ -300,6 +323,8 @@ FMCPResponse FWorldService::HandleSpawnActor(const FMCPRequest& Request)
 
 		AActor* NewActor = nullptr;
 		FString SpawnedType;
+		const FScopedTransaction Transaction(NSLOCTEXT("SpecialAgent", "SpawnActorTransaction", "SpecialAgent Spawn Actor"));
+		World->Modify();
 		
 		// Check if this is an asset path (contains /Game/, /Engine/, etc.)
 		bool bIsAssetPath = ActorClass.Contains(TEXT("/Game/")) || 
@@ -327,6 +352,7 @@ FMCPResponse FWorldService::HandleSpawnActor(const FMCPRequest& Request)
 					UStaticMeshComponent* MeshComp = MeshActor->GetStaticMeshComponent();
 					if (MeshComp)
 					{
+						MeshComp->Modify();
 						MeshComp->SetStaticMesh(StaticMesh);
 					}
 					NewActor = MeshActor;
@@ -376,6 +402,8 @@ FMCPResponse FWorldService::HandleSpawnActor(const FMCPRequest& Request)
 		}
 
 		// Apply rotation AFTER spawning to avoid gimbal lock issues in SpawnActor
+		NewActor->SetFlags(RF_Transactional);
+		NewActor->Modify();
 		if (bHasRotation)
 		{
 			NewActor->SetActorRotation(Rotation);
@@ -383,6 +411,7 @@ FMCPResponse FWorldService::HandleSpawnActor(const FMCPRequest& Request)
 		
 		// Apply scale
 		NewActor->SetActorScale3D(Scale);
+		MarkActorEdited(NewActor);
 
 		TSharedPtr<FJsonObject> ActorData = SerializeActor(NewActor);
 		Result->SetBoolField(TEXT("success"), true);
@@ -427,7 +456,11 @@ FMCPResponse FWorldService::HandleDeleteActor(const FMCPRequest& Request)
 			return Result;
 		}
 
+		const FScopedTransaction Transaction(NSLOCTEXT("SpecialAgent", "DeleteActorTransaction", "SpecialAgent Delete Actor"));
+		World->Modify();
+		Actor->Modify();
 		World->DestroyActor(Actor);
+		World->MarkPackageDirty();
 
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetStringField(TEXT("actor_name"), ActorName);
@@ -475,7 +508,10 @@ FMCPResponse FWorldService::HandleSetActorLocation(const FMCPRequest& Request)
 			return Result;
 		}
 
+		const FScopedTransaction Transaction(NSLOCTEXT("SpecialAgent", "MoveActorTransaction", "SpecialAgent Move Actor"));
+		Actor->Modify();
 		Actor->SetActorLocation(Location);
+		MarkActorEdited(Actor);
 
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetObjectField(TEXT("actor"), SerializeActor(Actor));
@@ -492,8 +528,51 @@ FMCPResponse FWorldService::HandleSetActorLocation(const FMCPRequest& Request)
 
 FMCPResponse FWorldService::HandleFindActorsByTag(const FMCPRequest& Request)
 {
-	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
-	Result->SetStringField(TEXT("status"), TEXT("not_implemented"));
+	if (!Request.Params.IsValid())
+	{
+		return InvalidParams(Request.Id, TEXT("Missing params"));
+	}
+
+	FString Tag;
+	if (!Request.Params->TryGetStringField(TEXT("tag"), Tag) || Tag.IsEmpty())
+	{
+		return InvalidParams(Request.Id, TEXT("Missing 'tag'"));
+	}
+
+	auto FindTask = [Tag]() -> TSharedPtr<FJsonObject>
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+
+		UWorld* World = GEditor->GetEditorWorldContext().World();
+		if (!World)
+		{
+			Result->SetBoolField(TEXT("success"), false);
+			Result->SetStringField(TEXT("error"), TEXT("No editor world"));
+			return Result;
+		}
+
+		TArray<TSharedPtr<FJsonValue>> ActorsJson;
+		const FName TagName(*Tag);
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* Actor = *It;
+			if (Actor && Actor->Tags.Contains(TagName))
+			{
+				if (TSharedPtr<FJsonObject> ActorData = SerializeActor(Actor))
+				{
+					ActorsJson.Add(MakeShared<FJsonValueObject>(ActorData));
+				}
+			}
+		}
+
+		Result->SetBoolField(TEXT("success"), true);
+		Result->SetStringField(TEXT("tag"), Tag);
+		Result->SetNumberField(TEXT("count"), ActorsJson.Num());
+		Result->SetArrayField(TEXT("actors"), ActorsJson);
+		return Result;
+	};
+
+	TSharedPtr<FJsonObject> Result = FGameThreadDispatcher::DispatchToGameThreadSyncWithReturn<TSharedPtr<FJsonObject>>(FindTask);
 	return FMCPResponse::Success(Request.Id, Result);
 }
 
@@ -625,6 +704,10 @@ FMCPResponse FWorldService::HandleDuplicateActor(const FMCPRequest& Request)
 			return Result;
 		}
 
+		const FScopedTransaction Transaction(NSLOCTEXT("SpecialAgent", "DuplicateActorTransaction", "SpecialAgent Duplicate Actor"));
+		World->Modify();
+		SourceActor->Modify();
+
 		// Select the source actor and use editor copy/paste
 		GEditor->SelectNone(true, true, false);
 		GEditor->SelectActor(SourceActor, true, true, true);
@@ -649,8 +732,10 @@ FMCPResponse FWorldService::HandleDuplicateActor(const FMCPRequest& Request)
 
 		if (bHasNewLocation)
 		{
+			NewActor->Modify();
 			NewActor->SetActorLocation(NewLocation);
 		}
+		MarkActorEdited(NewActor);
 
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetObjectField(TEXT("actor"), SerializeActor(NewActor));
@@ -706,7 +791,10 @@ FMCPResponse FWorldService::HandleSetActorRotation(const FMCPRequest& Request)
 			return Result;
 		}
 
+		const FScopedTransaction Transaction(NSLOCTEXT("SpecialAgent", "RotateActorTransaction", "SpecialAgent Rotate Actor"));
+		Actor->Modify();
 		Actor->SetActorRotation(Rotation);
+		MarkActorEdited(Actor);
 
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetObjectField(TEXT("actor"), SerializeActor(Actor));
@@ -756,7 +844,10 @@ FMCPResponse FWorldService::HandleSetActorScale(const FMCPRequest& Request)
 			return Result;
 		}
 
+		const FScopedTransaction Transaction(NSLOCTEXT("SpecialAgent", "ScaleActorTransaction", "SpecialAgent Scale Actor"));
+		Actor->Modify();
 		Actor->SetActorScale3D(Scale);
+		MarkActorEdited(Actor);
 
 		Result->SetBoolField(TEXT("success"), true);
 		Result->SetObjectField(TEXT("actor"), SerializeActor(Actor));

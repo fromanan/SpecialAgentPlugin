@@ -16,13 +16,19 @@ FString FNavigationService::GetServiceDescription() const
 // Helper function to execute Python code from request params
 FMCPResponse FNavigationService::ExecutePythonFromParams(const FMCPRequest& Request)
 {
-	if (!Request.Params.IsValid() || !Request.Params->HasField(TEXT("code")))
+	if (!Request.Params.IsValid())
 	{
 		return InvalidParams(Request.Id, TEXT("Missing required parameter: 'code' (Python script)"));
 	}
 
-	FString Code = Request.Params->GetStringField(TEXT("code"));
-	float Timeout = Request.Params->HasField(TEXT("timeout")) ? Request.Params->GetNumberField(TEXT("timeout")) : 30.0f;
+	FString Code;
+	if (!Request.Params->TryGetStringField(TEXT("code"), Code))
+	{
+		return InvalidParams(Request.Id, TEXT("Missing required parameter: 'code' (Python script)"));
+	}
+
+	float Timeout = 30.0f;
+	Request.Params->TryGetNumberField(TEXT("timeout"), Timeout);
 
 	FPythonService PythonService;
 	TSharedPtr<FJsonObject> PythonParams = MakeShared<FJsonObject>();

@@ -3,8 +3,7 @@
 #include "SpecialAgentModule.h"
 #include "MCPServer.h"
 #include "MCPStatusBarWidget.h"
-#include "Misc/ConfigCacheIni.h"
-#include "Misc/Paths.h"
+#include "SpecialAgentSettings.h"
 #include "LevelEditor.h"
 #include "ToolMenus.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -20,27 +19,15 @@ void FSpecialAgentModule::StartupModule()
 	// Create the MCP server instance
 	MCPServer = MakeShared<FSpecialAgentMCPServer>();
 
-	// Get config file path - plugin configs are in Game.ini, not Engine.ini
-	FString ConfigFilePath = FPaths::ProjectConfigDir() / TEXT("DefaultGame.ini");
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
 	
-	// Check if auto-start is enabled in config
-	bool bAutoStart = true;  // Default to true for now
-	int32 ServerPort = 8767;  // HTTP/SSE port for MCP client connections
-	
-	// Try to read from config (may not exist yet)
-	if (GConfig)
-	{
-		GConfig->GetBool(TEXT("/Script/SpecialAgent.SpecialAgentSettings"), TEXT("ServerEnabled"), bAutoStart, GGameIni);
-		GConfig->GetInt(TEXT("/Script/SpecialAgent.SpecialAgentSettings"), TEXT("ServerPort"), ServerPort, GGameIni);
-	}
-	
-	UE_LOG(LogTemp, Log, TEXT("SpecialAgent: ServerEnabled=%d, ServerPort=%d"), bAutoStart, ServerPort);
+	UE_LOG(LogTemp, Log, TEXT("SpecialAgent: ServerEnabled=%d, ServerPort=%d"), Settings.bServerEnabled, Settings.ServerPort);
 
-	if (bAutoStart)
+	if (Settings.bServerEnabled)
 	{
-		if (MCPServer->StartServer(ServerPort))
+		if (MCPServer->StartServer(Settings))
 		{
-			UE_LOG(LogTemp, Log, TEXT("SpecialAgent: MCP Server started on port %d"), ServerPort);
+			UE_LOG(LogTemp, Log, TEXT("SpecialAgent: MCP Server started on port %d"), Settings.ServerPort);
 		}
 		else
 		{

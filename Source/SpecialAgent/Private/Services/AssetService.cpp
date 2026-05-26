@@ -72,6 +72,7 @@ FMCPResponse FAssetService::HandleListAssets(const FMCPRequest& Request)
 			(*FilterObj)->TryGetNumberField(TEXT("max_results"), MaxResults);
 		}
 	}
+	MaxResults = FMath::Clamp(MaxResults, 1, 5000);
 
 	auto ListTask = [ClassFilter, PathFilter, MaxResults]() -> TSharedPtr<FJsonObject>
 	{
@@ -250,6 +251,7 @@ FMCPResponse FAssetService::HandleSearchAssets(const FMCPRequest& Request)
 
 	int32 MaxResults = 100;
 	Request.Params->TryGetNumberField(TEXT("max_results"), MaxResults);
+	MaxResults = FMath::Clamp(MaxResults, 1, 500);
 
 	auto SearchTask = [Query, MaxResults]() -> TSharedPtr<FJsonObject>
 	{

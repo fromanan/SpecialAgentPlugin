@@ -2,7 +2,7 @@
 
 **Connect AI to Unreal Engine 5**
 
-Full Python API access • 71+ level design tools • Visual feedback loop
+Local Python API access • 34 exposed editor tools • Visual feedback loop
 
 ---
 
@@ -10,9 +10,9 @@ Full Python API access • 71+ level design tools • Visual feedback loop
 
 SpecialAgent bridges AI assistants and Unreal Engine 5 through the **Model Context Protocol (MCP)**. Connect Claude, GPT, or any MCP-compatible LLM directly to your editor and control it through natural language.
 
-At its core, SpecialAgent provides **unrestricted Python execution** with full access to UE5's Python API—meaning your AI assistant can do anything the editor can do. On top of that foundation, **71+ purpose-built tools** handle common level design tasks without writing a single line of code.
+At its core, SpecialAgent provides local Python execution with UE5's Python API, guarded by loopback-only HTTP access and optional token authentication. On top of that foundation, 34 currently exposed tools handle common level design tasks without writing a single line of code.
 
-Native HTTP/SSE transport. No external bridges or dependencies.
+Native streamable HTTP transport. No external bridges or dependencies.
 
 ---
 
@@ -36,18 +36,14 @@ This is the unlimited foundation. If you can script it, AI can do it.
 
 #### Level Design Toolkit
 
-71+ specialized tools for world-building workflows:
+34 exposed tools for world-building workflows:
 
 | Category | Capabilities |
 |----------|-------------|
-| **Actors** | Spawn, transform, duplicate, delete, batch operations |
-| **Patterns** | Grid, circular, spline, and scatter placement |
-| **Landscape** | Sculpt height, flatten, smooth, paint material layers |
-| **Foliage** | Paint vegetation with density control |
-| **Lighting** | Spawn and configure lights, build lightmaps |
-| **Streaming** | Manage sub-levels for open worlds |
-| **Navigation** | Rebuild NavMesh, test pathfinding |
-| **Performance** | Analyze statistics, detect overlaps |
+| **Actors** | Spawn, transform, duplicate, delete, list, tag search |
+| **Assets** | Content Browser search, metadata, bounds, properties |
+| **Viewport** | Camera transform, actor focus, screen-to-world traces |
+| **Screenshots** | Capture and save bounded viewport images |
 | **Organization** | Folders, tags, labels, selection management |
 
 ### Visual Feedback Loop
@@ -94,7 +90,7 @@ Describe intent → Execute → Screenshot → AI analyzes → Iterate
 Once the editor launches, check the Output Log for:
 
 ```
-LogSpecialAgent: MCP Server started on port 8767
+SpecialAgent: MCP HTTP Server started on port 8767
 ```
 
 Or test with curl:
@@ -111,8 +107,7 @@ Add SpecialAgent to your MCP client configuration:
 {
   "mcpServers": {
     "SpecialAgent": {
-      "url": "http://localhost:8767/sse",
-      "transport": "sse"
+      "url": "http://localhost:8767/mcp"
     }
   }
 }
@@ -122,7 +117,7 @@ Add SpecialAgent to your MCP client configuration:
 
 Your AI assistant now has access to:
 - Python execution with full UE5 API
-- 71+ level design tools
+- 34 exposed editor tools
 - Viewport screenshot capture
 - Editor utilities (save, undo, redo)
 
@@ -134,17 +129,11 @@ Your AI assistant now has access to:
 |---------|:-------:|-------------|
 | **Python** | 3 | Execute scripts, run files, list modules |
 | **Screenshot** | 2 | Capture viewport for AI vision |
-| **World** | 30+ | Actor manipulation and spatial queries |
-| **Assets** | 4 | Content Browser search and inspection |
-| **Landscape** | 5 | Terrain sculpting and layer painting |
-| **Foliage** | 3 | Vegetation painting and removal |
-| **Lighting** | 4 | Light spawning and configuration |
-| **Streaming** | 4 | Sub-level loading and visibility |
-| **Performance** | 3 | Statistics and overlap analysis |
-| **Navigation** | 2 | NavMesh building and path testing |
-| **Viewport** | 4 | Camera control and actor focus |
-| **Utility** | 5 | Save, undo, redo, selection tools |
-| **Gameplay** | 2 | Trigger volumes and player starts |
+| **World** | 11 | Actor manipulation and spatial queries |
+| **Assets** | 6 | Content Browser search and inspection |
+| **Viewport** | 5 | Camera control, actor focus, screen traces |
+| **Utility** | 7 | Save, undo, redo, selection tools |
+| **Experimental services** | Direct only | Landscape, foliage, lighting, streaming, performance, navigation, and gameplay wrappers are not currently exposed in `tools/list` |
 
 ---
 
@@ -186,7 +175,7 @@ bVerboseLogging=false
 ┌─────────────────────────────────────────┐
 │        MCP Client (Claude, etc.)        │
 └──────────────┬──────────────────────────┘
-               │ HTTP/SSE + JSON-RPC 2.0
+               │ HTTP + JSON-RPC 2.0
 ┌──────────────▼──────────────────────────┐
 │       SpecialAgent MCP Server           │
 │                                         │
@@ -196,7 +185,7 @@ bVerboseLogging=false
 │  └─────────────────────────────────┘    │
 │                                         │
 │  ┌─────────────────────────────────┐    │
-│  │   14 Services (71+ Tools)       │    │
+│  │   34 Exposed Tools              │    │
 │  │   Level design & utilities      │    │
 │  └─────────────────────────────────┘    │
 │                                         │
@@ -217,16 +206,15 @@ bVerboseLogging=false
 
 | Document | Description |
 |----------|-------------|
-| [QUICKSTART.md](QUICKSTART.md) | Step-by-step setup guide |
 | [STRUCTURE.md](STRUCTURE.md) | Plugin architecture and file layout |
 
 ---
 
 ## Design Philosophy
 
-The 71+ tools exist for convenience and discoverability. Python execution is the real power.
+The exposed tools exist for convenience and discoverability. Python execution is the real power.
 
-When your AI assistant sees `world/place_in_circle`, it learns circular placement is possible. But for custom logic—density falloff, terrain-aware positioning, asset variation based on rules—it writes Python.
+When your AI assistant needs custom logic such as density falloff, terrain-aware positioning, or asset variation based on rules, it writes Python.
 
 Both layers work together: quick tools for common tasks, unlimited scripting for everything else.
 
@@ -265,7 +253,7 @@ Both layers work together: quick tools for common tasks, unlimited scripting for
 | Engine Version | UE 5.6+ |
 | Platforms | Windows, Mac, Linux |
 | Module Type | Editor |
-| Transport | HTTP/SSE (native) |
+| Transport | HTTP (native) |
 | Protocol | JSON-RPC 2.0 / MCP |
 | Default Port | 8767 |
 

@@ -266,8 +266,18 @@ FMCPResponse FMCPRequestRouter::HandleToolsCall(const FMCPRequest& Request)
 		return FMCPResponse::Error(Request.Id, -32602, TEXT("Invalid params"));
 	}
 	
-	FString ToolName = Request.Params->GetStringField(TEXT("name"));
-	TSharedPtr<FJsonObject> Arguments = Request.Params->GetObjectField(TEXT("arguments"));
+	FString ToolName;
+	if (!Request.Params->TryGetStringField(TEXT("name"), ToolName) || ToolName.IsEmpty())
+	{
+		return FMCPResponse::Error(Request.Id, -32602, TEXT("Invalid params: missing tool name"));
+	}
+
+	TSharedPtr<FJsonObject> Arguments = MakeShared<FJsonObject>();
+	const TSharedPtr<FJsonObject>* ArgumentsObj = nullptr;
+	if (Request.Params->TryGetObjectField(TEXT("arguments"), ArgumentsObj) && ArgumentsObj && ArgumentsObj->IsValid())
+	{
+		Arguments = *ArgumentsObj;
+	}
 	
 	// Split tool name into service/method
 	FString ServicePrefix;
@@ -290,6 +300,9 @@ FMCPResponse FMCPRequestRouter::HandleToolsCall(const FMCPRequest& Request)
 	ModifiedRequest.Method = ToolName;
 	ModifiedRequest.Params = Arguments;
 	ModifiedRequest.Id = Request.Id;
+	ModifiedRequest.IdValue = Request.IdValue;
+	ModifiedRequest.bHasId = Request.bHasId;
+	ModifiedRequest.bIsNotification = Request.bIsNotification;
 	
 	// Route to service
 	TSharedPtr<IMCPService> Service = *ServicePtr;

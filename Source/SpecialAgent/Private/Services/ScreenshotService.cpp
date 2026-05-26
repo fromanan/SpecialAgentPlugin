@@ -2,6 +2,7 @@
 
 #include "Services/ScreenshotService.h"
 #include "GameThreadDispatcher.h"
+#include "SpecialAgentSettings.h"
 #include "Editor.h"
 #include "LevelEditorViewport.h"
 #include "EditorViewportClient.h"
@@ -12,6 +13,51 @@
 #include "Modules/ModuleManager.h"
 #include "Misc/Base64.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+
+namespace
+{
+	void NormalizeFullPath(FString& Path)
+	{
+		Path = FPaths::ConvertRelativePathToFull(Path);
+		FPaths::NormalizeFilename(Path);
+		FPaths::CollapseRelativeDirectories(Path);
+	}
+
+	bool ResolveScreenshotSavePath(const FString& InFilePath, FString& OutFilePath, FString& OutError)
+	{
+		const FString ScreenshotRoot = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("SpecialAgent"), TEXT("Screenshots"));
+		FString Candidate = InFilePath;
+
+		if (FPaths::IsRelative(Candidate))
+		{
+			Candidate = FPaths::Combine(ScreenshotRoot, Candidate);
+		}
+
+		NormalizeFullPath(Candidate);
+		FString NormalizedRoot = ScreenshotRoot;
+		NormalizeFullPath(NormalizedRoot);
+		if (!NormalizedRoot.EndsWith(TEXT("/")))
+		{
+			NormalizedRoot += TEXT("/");
+		}
+
+		if (!Candidate.StartsWith(NormalizedRoot, ESearchCase::IgnoreCase))
+		{
+			OutError = TEXT("Screenshots can only be saved under Project/Saved/SpecialAgent/Screenshots");
+			return false;
+		}
+
+		if (FPaths::GetExtension(Candidate).IsEmpty())
+		{
+			Candidate += TEXT(".png");
+		}
+
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Candidate), true);
+		OutFilePath = Candidate;
+		return true;
+	}
+}
 
 FScreenshotService::FScreenshotService()
 {
@@ -58,7 +104,7 @@ TArray<FMCPToolInfo> FScreenshotService::GetAvailableTools() const
 		
 		TSharedPtr<FJsonObject> FileParam = MakeShared<FJsonObject>();
 		FileParam->SetStringField(TEXT("type"), TEXT("string"));
-		FileParam->SetStringField(TEXT("description"), TEXT("File path to save screenshot"));
+		FileParam->SetStringField(TEXT("description"), TEXT("Relative filename under Project/Saved/SpecialAgent/Screenshots, or an absolute path inside that directory"));
 		Tool.Parameters->SetObjectField(TEXT("file_path"), FileParam);
 		Tool.RequiredParams.Add(TEXT("file_path"));
 		
@@ -78,9 +124,11 @@ FMCPResponse FScreenshotService::HandleRequest(const FMCPRequest& Request, const
 
 FMCPResponse FScreenshotService::HandleCapture(const FMCPRequest& Request)
 {
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
+
 	// Get parameters - smaller defaults to avoid huge base64 strings causing client hangs
-	int32 Width = 1280;
-	int32 Height = 720;
+	int32 Width = Settings.DefaultScreenshotWidth;
+	int32 Height = Settings.DefaultScreenshotHeight;
 	int32 Quality = 85;  // JPEG quality (1-100), use 100 for PNG
 	bool bReturnBase64 = true;
 
@@ -94,6 +142,8 @@ FMCPResponse FScreenshotService::HandleCapture(const FMCPRequest& Request)
 	
 	// Clamp quality to valid range
 	Quality = FMath::Clamp(Quality, 1, 100);
+	Width = FMath::Clamp(Width, 64, Settings.MaxScreenshotWidth);
+	Height = FMath::Clamp(Height, 64, Settings.MaxScreenshotHeight);
 
 	// Capture on game thread
 	auto CaptureTask = [Width, Height, Quality, bReturnBase64]() -> TSharedPtr<FJsonObject>
@@ -198,6 +248,8 @@ FMCPResponse FScreenshotService::HandleCapture(const FMCPRequest& Request)
 
 FMCPResponse FScreenshotService::HandleSave(const FMCPRequest& Request)
 {
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
+
 	// Get parameters
 	if (!Request.Params.IsValid())
 	{
@@ -210,13 +262,26 @@ FMCPResponse FScreenshotService::HandleSave(const FMCPRequest& Request)
 		return InvalidParams(Request.Id, TEXT("Missing required parameter 'file_path'"));
 	}
 
-	int32 Width = 1920;
-	int32 Height = 1080;
+	FString ResolvedFilePath;
+	FString PathError;
+	if (!ResolveScreenshotSavePath(FilePath, ResolvedFilePath, PathError))
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("error"), PathError);
+		Result->SetStringField(TEXT("file_path"), FilePath);
+		return FMCPResponse::Success(Request.Id, Result);
+	}
+
+	int32 Width = Settings.DefaultScreenshotWidth;
+	int32 Height = Settings.DefaultScreenshotHeight;
 	Request.Params->TryGetNumberField(TEXT("width"), Width);
 	Request.Params->TryGetNumberField(TEXT("height"), Height);
+	Width = FMath::Clamp(Width, 64, Settings.MaxScreenshotWidth);
+	Height = FMath::Clamp(Height, 64, Settings.MaxScreenshotHeight);
 
 	// Capture and save on game thread
-	auto SaveTask = [Width, Height, FilePath]() -> TSharedPtr<FJsonObject>
+	auto SaveTask = [Width, Height, ResolvedFilePath]() -> TSharedPtr<FJsonObject>
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
@@ -263,21 +328,21 @@ FMCPResponse FScreenshotService::HandleSave(const FMCPRequest& Request)
 		TArray64<uint8> CompressedData = ImageWrapper->GetCompressed(100);
 
 		// Save to file
-		if (FFileHelper::SaveArrayToFile(CompressedData, *FilePath))
+		if (FFileHelper::SaveArrayToFile(CompressedData, *ResolvedFilePath))
 		{
 			Result->SetBoolField(TEXT("success"), true);
-			Result->SetStringField(TEXT("file_path"), FilePath);
+			Result->SetStringField(TEXT("file_path"), ResolvedFilePath);
 			Result->SetNumberField(TEXT("width"), ViewportSize.X);
 			Result->SetNumberField(TEXT("height"), ViewportSize.Y);
 			Result->SetNumberField(TEXT("file_size"), CompressedData.Num());
 
 			UE_LOG(LogTemp, Log, TEXT("SpecialAgent: Screenshot saved to: %s (%dx%d)"), 
-				*FilePath, ViewportSize.X, ViewportSize.Y);
+				*ResolvedFilePath, ViewportSize.X, ViewportSize.Y);
 		}
 		else
 		{
 			Result->SetBoolField(TEXT("success"), false);
-			Result->SetStringField(TEXT("error"), FString::Printf(TEXT("Failed to save file: %s"), *FilePath));
+			Result->SetStringField(TEXT("error"), FString::Printf(TEXT("Failed to save file: %s"), *ResolvedFilePath));
 		}
 
 		return Result;

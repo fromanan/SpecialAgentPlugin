@@ -2,6 +2,7 @@
 
 #include "MCPStatusBarWidget.h"
 #include "MCPServer.h"
+#include "SpecialAgentSettings.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
@@ -69,15 +70,15 @@ FSlateColor SMCPStatusBarWidget::GetStatusColor() const
 
 FText SMCPStatusBarWidget::GetStatusTooltip() const
 {
+	TSharedPtr<FSpecialAgentMCPServer> Server = MCPServer.Pin();
+	const int32 Port = Server.IsValid() ? Server->GetPort() : FSpecialAgentSettings::Load().ServerPort;
+
 	switch (CachedStatus)
 	{
 		case EMCPServerStatus::Connected:
-			return FText::Format(
-				LOCTEXT("MCPConnectedTooltip", "MCP Server: Connected ({0} client(s))\nPort: 8767\nClick to copy config to clipboard"),
-				FText::AsNumber(ConnectedClients)
-			);
+			return FText::FromString(FString::Printf(TEXT("MCP Server: Connected (%d client(s))\nPort: %d\nClick to copy config to clipboard"), ConnectedClients, Port));
 		case EMCPServerStatus::Listening:
-			return LOCTEXT("MCPListeningTooltip", "MCP Server: Listening\nPort: 8767\nWaiting for MCP client...\nClick to copy config to clipboard");
+			return FText::FromString(FString::Printf(TEXT("MCP Server: Listening\nPort: %d\nWaiting for MCP client...\nClick to copy config to clipboard"), Port));
 		case EMCPServerStatus::Offline:
 		default:
 			return LOCTEXT("MCPOfflineTooltip", "MCP Server: Offline\nServer failed to start or is disabled.\nClick to attempt restart");
@@ -106,9 +107,12 @@ EMCPServerStatus SMCPStatusBarWidget::GetServerStatus() const
 FReply SMCPStatusBarWidget::OnStatusClicked()
 {
 	TSharedPtr<FSpecialAgentMCPServer> Server = MCPServer.Pin();
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
+	const int32 Port = Server.IsValid() ? Server->GetPort() : Settings.ServerPort;
+	const FString EndpointUrl = FString::Printf(TEXT("http://localhost:%d/mcp"), Port);
 	
 	// MCP configuration JSON - use /mcp endpoint for streamable HTTP transport
-	const FString ConfigJson = TEXT("{\n  \"mcpServers\": {\n    \"SpecialAgent\": {\n      \"url\": \"http://localhost:8767/mcp\"\n    }\n  }\n}");
+	const FString ConfigJson = FString::Printf(TEXT("{\n  \"mcpServers\": {\n    \"SpecialAgent\": {\n      \"url\": \"%s\"\n    }\n  }\n}"), *EndpointUrl);
 	
 	FText Message;
 	SNotificationItem::ECompletionState State;
@@ -118,17 +122,14 @@ FReply SMCPStatusBarWidget::OnStatusClicked()
 		case EMCPServerStatus::Connected:
 			// Copy config to clipboard
 			FPlatformApplicationMisc::ClipboardCopy(*ConfigJson);
-			Message = FText::Format(
-				LOCTEXT("MCPConnectedMessage", "MCP Server Connected ({0} client(s))\n\nConfiguration copied to clipboard!\n\nEndpoints:\n• SSE: http://localhost:8767/sse\n• Message: http://localhost:8767/message\n• Health: http://localhost:8767/health"),
-				FText::AsNumber(ConnectedClients)
-			);
+			Message = FText::FromString(FString::Printf(TEXT("MCP Server Connected (%d client(s))\n\nConfiguration copied to clipboard!\n\nEndpoints:\nMCP: %s\nHealth: http://localhost:%d/health"), ConnectedClients, *EndpointUrl, Port));
 			State = SNotificationItem::CS_Success;
 			break;
 
 		case EMCPServerStatus::Listening:
 			// Copy config to clipboard
 			FPlatformApplicationMisc::ClipboardCopy(*ConfigJson);
-			Message = LOCTEXT("MCPListeningMessage", "MCP Server Listening - Configuration copied to clipboard!\n\nPaste this into your MCP client config:\n{\n  \"mcpServers\": {\n    \"SpecialAgent\": {\n      \"url\": \"http://localhost:8767/mcp\"\n    }\n  }\n}");
+			Message = FText::FromString(FString::Printf(TEXT("MCP Server Listening - Configuration copied to clipboard!\n\nPaste this into your MCP client config:\n%s"), *ConfigJson));
 			State = SNotificationItem::CS_Pending;
 			break;
 
@@ -141,7 +142,7 @@ FReply SMCPStatusBarWidget::OnStatusClicked()
 			if (Server.IsValid() && !Server->IsRunning())
 			{
 				UE_LOG(LogTemp, Log, TEXT("SpecialAgent: Attempting to restart MCP server..."));
-				if (Server->StartServer(8767))
+				if (Server->StartServer(Settings))
 				{
 					FPlatformApplicationMisc::ClipboardCopy(*ConfigJson);
 					Message = LOCTEXT("MCPRestartedMessage", "MCP server restarted successfully!\n\nConfiguration copied to clipboard.");

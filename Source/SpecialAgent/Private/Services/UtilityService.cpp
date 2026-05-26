@@ -17,6 +17,24 @@
 #include "CollisionQueryParams.h"
 #include "SceneView.h"
 
+namespace
+{
+	FLevelEditorViewportClient* GetActiveLevelViewportClient()
+	{
+		if (GCurrentLevelEditingViewportClient)
+		{
+			return GCurrentLevelEditingViewportClient;
+		}
+
+		if (GLastKeyLevelEditingViewportClient)
+		{
+			return GLastKeyLevelEditingViewportClient;
+		}
+
+		return nullptr;
+	}
+}
+
 FUtilityService::FUtilityService()
 {
 }
@@ -436,19 +454,19 @@ FMCPResponse FUtilityService::HandleSelectAtScreen(const FMCPRequest& Request)
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
-		FViewport* Viewport = GEditor->GetActiveViewport();
-		if (!Viewport)
-		{
-			Result->SetBoolField(TEXT("success"), false);
-			Result->SetStringField(TEXT("error"), TEXT("No active viewport found"));
-			return Result;
-		}
-
-		FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(Viewport->GetClient());
+		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
 		if (!ViewportClient)
 		{
 			Result->SetBoolField(TEXT("success"), false);
-			Result->SetStringField(TEXT("error"), TEXT("No active viewport client found"));
+			Result->SetStringField(TEXT("error"), TEXT("No active level viewport client found"));
+			return Result;
+		}
+
+		FViewport* Viewport = GEditor ? GEditor->GetActiveViewport() : nullptr;
+		if (!Viewport || Viewport->GetClient() != ViewportClient)
+		{
+			Result->SetBoolField(TEXT("success"), false);
+			Result->SetStringField(TEXT("error"), TEXT("No active level viewport found"));
 			return Result;
 		}
 

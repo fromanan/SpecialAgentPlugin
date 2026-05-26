@@ -9,7 +9,7 @@
  * World Service
  * 
  * Handles world/level introspection and actor manipulation.
- * 30+ methods for querying, spawning, modifying, and organizing actors.
+ * Exposes implemented actor query and mutation tools, with additional direct handlers under development.
  */
 class SPECIALAGENT_API FWorldService : public IMCPService
 {

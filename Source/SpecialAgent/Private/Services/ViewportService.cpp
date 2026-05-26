@@ -12,6 +12,24 @@
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "SceneView.h"
 
+namespace
+{
+	FLevelEditorViewportClient* GetActiveLevelViewportClient()
+	{
+		if (GCurrentLevelEditingViewportClient)
+		{
+			return GCurrentLevelEditingViewportClient;
+		}
+
+		if (GLastKeyLevelEditingViewportClient)
+		{
+			return GLastKeyLevelEditingViewportClient;
+		}
+
+		return nullptr;
+	}
+}
+
 FViewportService::FViewportService()
 {
 }
@@ -56,7 +74,7 @@ FMCPResponse FViewportService::HandleSetLocation(const FMCPRequest& Request)
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
-		FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient());
+		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
 		if (!ViewportClient)
 		{
 			Result->SetBoolField(TEXT("success"), false);
@@ -107,7 +125,7 @@ FMCPResponse FViewportService::HandleSetRotation(const FMCPRequest& Request)
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
-		FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient());
+		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
 		if (!ViewportClient)
 		{
 			Result->SetBoolField(TEXT("success"), false);
@@ -140,7 +158,7 @@ FMCPResponse FViewportService::HandleGetTransform(const FMCPRequest& Request)
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
-		FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient());
+		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
 		if (!ViewportClient)
 		{
 			Result->SetBoolField(TEXT("success"), false);
@@ -248,7 +266,7 @@ FMCPResponse FViewportService::HandleFocusActor(const FMCPRequest& Request)
 		}
 
 		// Focus on the actor (like pressing F in editor)
-		FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(GEditor->GetActiveViewport()->GetClient());
+		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
 		if (ViewportClient)
 		{
 			ViewportClient->FocusViewportOnBox(FoundActor->GetComponentsBoundingBox());
@@ -291,19 +309,19 @@ FMCPResponse FViewportService::HandleTraceFromScreen(const FMCPRequest& Request)
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
-		FViewport* Viewport = GEditor->GetActiveViewport();
-		if (!Viewport)
-		{
-			Result->SetBoolField(TEXT("success"), false);
-			Result->SetStringField(TEXT("error"), TEXT("No active viewport found"));
-			return Result;
-		}
-
-		FLevelEditorViewportClient* ViewportClient = static_cast<FLevelEditorViewportClient*>(Viewport->GetClient());
+		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
 		if (!ViewportClient)
 		{
 			Result->SetBoolField(TEXT("success"), false);
-			Result->SetStringField(TEXT("error"), TEXT("No active viewport client found"));
+			Result->SetStringField(TEXT("error"), TEXT("No active level viewport client found"));
+			return Result;
+		}
+
+		FViewport* Viewport = GEditor ? GEditor->GetActiveViewport() : nullptr;
+		if (!Viewport || Viewport->GetClient() != ViewportClient)
+		{
+			Result->SetBoolField(TEXT("success"), false);
+			Result->SetStringField(TEXT("error"), TEXT("No active level viewport found"));
 			return Result;
 		}
 

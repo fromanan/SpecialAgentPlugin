@@ -3,11 +3,167 @@
 #include "Services/PythonService.h"
 #include "GameThreadDispatcher.h"
 #include "IPythonScriptPlugin.h"
+#include "SpecialAgentSettings.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/Guid.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+
+namespace
+{
+	FString GetRootModuleName(FString ModuleName)
+	{
+		ModuleName.TrimStartAndEndInline();
+
+		FString Left;
+		FString Right;
+		if (ModuleName.Split(TEXT(" as "), &Left, &Right, ESearchCase::IgnoreCase))
+		{
+			ModuleName = Left;
+		}
+
+		if (ModuleName.Split(TEXT("."), &Left, &Right))
+		{
+			ModuleName = Left;
+		}
+
+		return ModuleName.TrimStartAndEnd();
+	}
+
+	bool ValidatePythonPolicy(const FString& Code, const FSpecialAgentSettings& Settings, FString& OutError)
+	{
+		if (!Settings.bPythonExecutionEnabled)
+		{
+			OutError = TEXT("Python execution is disabled by SpecialAgent settings");
+			return false;
+		}
+
+		if (!Settings.bPythonSandboxEnabled)
+		{
+			return true;
+		}
+
+		if (Code.Contains(TEXT("__import__")) || Code.Contains(TEXT("importlib")))
+		{
+			OutError = TEXT("Dynamic Python imports are disabled by SpecialAgent sandbox settings");
+			return false;
+		}
+
+		TArray<FString> Lines;
+		Code.ParseIntoArrayLines(Lines, false);
+		for (FString Line : Lines)
+		{
+			Line.TrimStartAndEndInline();
+			if (Line.IsEmpty() || Line.StartsWith(TEXT("#")))
+			{
+				continue;
+			}
+
+			if (Line.StartsWith(TEXT("import ")))
+			{
+				FString Imports = Line.RightChop(7);
+				TArray<FString> Modules;
+				Imports.ParseIntoArray(Modules, TEXT(","), true);
+				for (const FString& Module : Modules)
+				{
+					const FString RootModule = GetRootModuleName(Module);
+					if (!Settings.IsPythonModuleAllowed(RootModule))
+					{
+						OutError = FString::Printf(TEXT("Python module '%s' is not allowed by SpecialAgent sandbox settings"), *RootModule);
+						return false;
+					}
+				}
+			}
+			else if (Line.StartsWith(TEXT("from ")))
+			{
+				FString ImportPrefix;
+				FString Rest;
+				if (Line.Split(TEXT(" import "), &ImportPrefix, &Rest))
+				{
+					const FString RootModule = GetRootModuleName(ImportPrefix.RightChop(5));
+					if (!Settings.IsPythonModuleAllowed(RootModule))
+					{
+						OutError = FString::Printf(TEXT("Python module '%s' is not allowed by SpecialAgent sandbox settings"), *RootModule);
+						return false;
+					}
+				}
+			}
+		}
+
+		return true;
+	}
+
+	void NormalizeFullPath(FString& Path)
+	{
+		Path = FPaths::ConvertRelativePathToFull(Path);
+		FPaths::NormalizeFilename(Path);
+		FPaths::CollapseRelativeDirectories(Path);
+	}
+
+	bool IsUnderDirectory(FString Path, FString RootDirectory)
+	{
+		NormalizeFullPath(Path);
+		NormalizeFullPath(RootDirectory);
+
+		if (!RootDirectory.EndsWith(TEXT("/")))
+		{
+			RootDirectory += TEXT("/");
+		}
+
+		return Path.StartsWith(RootDirectory, ESearchCase::IgnoreCase);
+	}
+
+	bool ResolvePythonScriptPath(const FString& InFilePath, FString& OutFilePath, FString& OutError)
+	{
+		const FString ProjectPythonDir = FPaths::Combine(FPaths::ProjectContentDir(), TEXT("Python"));
+		FString PluginPythonDir;
+		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("SpecialAgent"));
+		if (Plugin.IsValid())
+		{
+			PluginPythonDir = FPaths::Combine(Plugin->GetContentDir(), TEXT("Python"));
+		}
+
+		TArray<FString> AllowedRoots;
+		AllowedRoots.Add(ProjectPythonDir);
+		if (!PluginPythonDir.IsEmpty())
+		{
+			AllowedRoots.Add(PluginPythonDir);
+		}
+
+		if (FPaths::IsRelative(InFilePath))
+		{
+			for (const FString& Root : AllowedRoots)
+			{
+				FString Candidate = FPaths::Combine(Root, InFilePath);
+				NormalizeFullPath(Candidate);
+				if (FPaths::FileExists(Candidate))
+				{
+					OutFilePath = Candidate;
+					return true;
+				}
+			}
+		}
+		else
+		{
+			FString Candidate = InFilePath;
+			NormalizeFullPath(Candidate);
+			for (const FString& Root : AllowedRoots)
+			{
+				if (IsUnderDirectory(Candidate, Root) && FPaths::FileExists(Candidate))
+				{
+					OutFilePath = Candidate;
+					return true;
+				}
+			}
+		}
+
+		OutError = TEXT("Python scripts must exist under Project/Content/Python or Plugins/SpecialAgent/Content/Python");
+		return false;
+	}
+}
 
 FPythonService::FPythonService()
 {
@@ -21,6 +177,11 @@ FString FPythonService::GetServiceDescription() const
 TArray<FMCPToolInfo> FPythonService::GetAvailableTools() const
 {
 	TArray<FMCPToolInfo> Tools;
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
+	if (!Settings.bPythonExecutionEnabled)
+	{
+		return Tools;
+	}
 	
 	// execute
 	{
@@ -35,7 +196,7 @@ TArray<FMCPToolInfo> FPythonService::GetAvailableTools() const
 		
 		TSharedPtr<FJsonObject> TimeoutParam = MakeShared<FJsonObject>();
 		TimeoutParam->SetStringField(TEXT("type"), TEXT("number"));
-		TimeoutParam->SetStringField(TEXT("description"), TEXT("Execution timeout in seconds (default: 30.0)"));
+		TimeoutParam->SetStringField(TEXT("description"), TEXT("Soft execution timeout in seconds (default: 30.0). Long-running Python cannot always be interrupted safely."));
 		Tool.Parameters->SetObjectField(TEXT("timeout"), TimeoutParam);
 		
 		Tool.RequiredParams.Add(TEXT("code"));
@@ -79,6 +240,8 @@ FMCPResponse FPythonService::HandleRequest(const FMCPRequest& Request, const FSt
 
 FMCPResponse FPythonService::HandleExecute(const FMCPRequest& Request)
 {
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
+
 	// Get parameters
 	if (!Request.Params.IsValid())
 	{
@@ -93,9 +256,24 @@ FMCPResponse FPythonService::HandleExecute(const FMCPRequest& Request)
 
 	float Timeout = 30.0f;
 	Request.Params->TryGetNumberField(TEXT("timeout"), Timeout);
+	if (Timeout <= 0.0f)
+	{
+		Timeout = Settings.PythonExecutionTimeout;
+	}
+
+	FString PolicyError;
+	if (!ValidatePythonPolicy(Code, Settings, PolicyError))
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("stdout"), TEXT(""));
+		Result->SetStringField(TEXT("stderr"), PolicyError);
+		Result->SetNumberField(TEXT("execution_time"), 0.0);
+		return FMCPResponse::Success(Request.Id, Result);
+	}
 
 	// Execute on game thread
-	auto ExecuteTask = [Code]() -> TSharedPtr<FJsonObject>
+	auto ExecuteTask = [Code, Timeout]() -> TSharedPtr<FJsonObject>
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
@@ -115,7 +293,7 @@ FMCPResponse FPythonService::HandleExecute(const FMCPRequest& Request)
 		
 		// Generate a unique temporary file path
 		FString TempDir = FPaths::ProjectIntermediateDir();
-		FString TempFile = FPaths::Combine(TempDir, TEXT("mcp_python_output.txt"));
+		FString TempFile = FPaths::Combine(TempDir, FString::Printf(TEXT("mcp_python_output_%s.json"), *FGuid::NewGuid().ToString(EGuidFormats::Digits)));
 		
 		// Wrap user code to capture stdout/stderr and write to temp file
 		FString IndentedCode = TEXT("    ") + Code.Replace(TEXT("\n"), TEXT("\n    "));
@@ -199,6 +377,8 @@ FMCPResponse FPythonService::HandleExecute(const FMCPRequest& Request)
 		Result->SetStringField(TEXT("stdout"), StdOut);
 		Result->SetStringField(TEXT("stderr"), StdErr);
 		Result->SetNumberField(TEXT("execution_time"), ExecutionTime);
+		Result->SetBoolField(TEXT("timed_out"), ExecutionTime > Timeout);
+		Result->SetNumberField(TEXT("timeout"), Timeout);
 
 		if (!bSuccess)
 		{
@@ -221,6 +401,8 @@ FMCPResponse FPythonService::HandleExecute(const FMCPRequest& Request)
 
 FMCPResponse FPythonService::HandleExecuteFile(const FMCPRequest& Request)
 {
+	const FSpecialAgentSettings Settings = FSpecialAgentSettings::Load();
+
 	// Get parameters
 	if (!Request.Params.IsValid())
 	{
@@ -233,18 +415,39 @@ FMCPResponse FPythonService::HandleExecuteFile(const FMCPRequest& Request)
 		return InvalidParams(Request.Id, TEXT("Missing required parameter 'file_path'"));
 	}
 
-	// Read file content
-	FString FileContent;
-	if (!FFileHelper::LoadFileToString(FileContent, *FilePath))
+	FString ResolvedFilePath;
+	FString ResolveError;
+	if (!ResolvePythonScriptPath(FilePath, ResolvedFilePath, ResolveError))
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 		Result->SetBoolField(TEXT("success"), false);
-		Result->SetStringField(TEXT("stderr"), FString::Printf(TEXT("Failed to read file: %s"), *FilePath));
+		Result->SetStringField(TEXT("stderr"), ResolveError);
+		Result->SetStringField(TEXT("file_path"), FilePath);
+		return FMCPResponse::Success(Request.Id, Result);
+	}
+
+	// Read file content
+	FString FileContent;
+	if (!FFileHelper::LoadFileToString(FileContent, *ResolvedFilePath))
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("stderr"), FString::Printf(TEXT("Failed to read file: %s"), *ResolvedFilePath));
+		return FMCPResponse::Success(Request.Id, Result);
+	}
+
+	FString PolicyError;
+	if (!ValidatePythonPolicy(FileContent, Settings, PolicyError))
+	{
+		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+		Result->SetBoolField(TEXT("success"), false);
+		Result->SetStringField(TEXT("stderr"), PolicyError);
+		Result->SetStringField(TEXT("file_path"), ResolvedFilePath);
 		return FMCPResponse::Success(Request.Id, Result);
 	}
 
 	// Execute the file content as Python code
-	auto ExecuteTask = [FileContent, FilePath]() -> TSharedPtr<FJsonObject>
+	auto ExecuteTask = [FileContent, ResolvedFilePath]() -> TSharedPtr<FJsonObject>
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
@@ -271,10 +474,10 @@ FMCPResponse FPythonService::HandleExecuteFile(const FMCPRequest& Request)
 		Result->SetStringField(TEXT("stdout"), PythonCommand.CommandResult);
 		Result->SetStringField(TEXT("stderr"), bSuccess ? TEXT("") : PythonCommand.CommandResult);
 		Result->SetNumberField(TEXT("execution_time"), ExecutionTime);
-		Result->SetStringField(TEXT("file_path"), FilePath);
+		Result->SetStringField(TEXT("file_path"), ResolvedFilePath);
 
 		UE_LOG(LogTemp, Log, TEXT("SpecialAgent: Python file execution %s in %.3f seconds: %s"), 
-			bSuccess ? TEXT("succeeded") : TEXT("failed"), ExecutionTime, *FilePath);
+			bSuccess ? TEXT("succeeded") : TEXT("failed"), ExecutionTime, *ResolvedFilePath);
 
 		return Result;
 	};
