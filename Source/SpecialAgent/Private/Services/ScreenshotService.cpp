@@ -17,7 +17,7 @@
 
 namespace
 {
-	void NormalizeFullPath(FString& Path)
+	void NormalizeScreenshotFullPath(FString& Path)
 	{
 		Path = FPaths::ConvertRelativePathToFull(Path);
 		FPaths::NormalizeFilename(Path);
@@ -34,9 +34,9 @@ namespace
 			Candidate = FPaths::Combine(ScreenshotRoot, Candidate);
 		}
 
-		NormalizeFullPath(Candidate);
+		NormalizeScreenshotFullPath(Candidate);
 		FString NormalizedRoot = ScreenshotRoot;
-		NormalizeFullPath(NormalizedRoot);
+		NormalizeScreenshotFullPath(NormalizedRoot);
 		if (!NormalizedRoot.EndsWith(TEXT("/")))
 		{
 			NormalizedRoot += TEXT("/");

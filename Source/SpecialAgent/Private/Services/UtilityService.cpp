@@ -19,7 +19,7 @@
 
 namespace
 {
-	FLevelEditorViewportClient* GetActiveLevelViewportClient()
+	FLevelEditorViewportClient* GetActiveUtilityLevelViewportClient()
 	{
 		if (GCurrentLevelEditingViewportClient)
 		{
@@ -454,7 +454,7 @@ FMCPResponse FUtilityService::HandleSelectAtScreen(const FMCPRequest& Request)
 	{
 		TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
 
-		FLevelEditorViewportClient* ViewportClient = GetActiveLevelViewportClient();
+		FLevelEditorViewportClient* ViewportClient = GetActiveUtilityLevelViewportClient();
 		if (!ViewportClient)
 		{
 			Result->SetBoolField(TEXT("success"), false);
